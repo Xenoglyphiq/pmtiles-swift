@@ -1,13 +1,13 @@
 # PMTiles for Swift
 
-Read [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file tile archives: header, directories, tile lookup and tile bytes, from memory, a file, or HTTP range requests. Implements the pmtiles spec · Spec v0.1.1 · Conformance: **core ✓ io ✓ full ✓** (68/68)
+Read [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file tile archives: header, directories, tile lookup and tile bytes, from memory, a file, or HTTP range requests. Implements the pmtiles spec · Spec v0.2.0 · Conformance: **core ✓ io ✓ full ✓** (81/81)
 
 Swift tools 6.0 · iOS 16 / macOS 13 / Linux. **No dependencies.** gzip is decoded by a small built-in inflate, so io works the same on Apple platforms and Linux.
 
 ## Install
 
 ```swift
-.package(url: "https://github.com/Xenoglyphiq/pmtiles-swift", from: "0.1.0")
+.package(url: "https://github.com/Xenoglyphiq/pmtiles-swift", from: "0.2.0")
 ```
 
 Then add `PMTiles` (core) and/or `PMTilesIO` (sources, `getTile`, `readMetadata`) to your target.
