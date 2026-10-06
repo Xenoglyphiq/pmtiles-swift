@@ -91,9 +91,12 @@ Errors are `PMTilesError` (typed throws) with a `kind` (`invalidInput`, `unsuppo
 
 | Benchmark | Reference | This port | Ratio |
 |---|---|---|---|
-| get_tile, 10,000 lookups | Rust `pmtiles` | — | — |
+| `get_tile`, `PMTilesReader` | Rust `pmtiles` 0.24.1: 165.1 ms | 344.9 ms | 2.09× |
+| `get_tile`, stateless | Rust `pmtiles` 0.24.1: 165.1 ms | 359.6 ms | 2.18× |
 
-Recorded before v0.1.0.
+Median per pass of 10,000 lookups from memory, method in `.spec/bench/README.md`. Recorded 2026-10-06 on an Apple M5 Pro, interleaved with the reference in one session (median of three rounds). Swift 6.4, `-c release`.
+
+This misses the spec's 2× target. The one optimization pass (profiled: CRC-32 and directory decoding) took it from about 3.7× (673 ms) to 2.09×; the remaining gap is recorded here rather than hidden.
 
 ## License
 
