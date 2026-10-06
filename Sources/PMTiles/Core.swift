@@ -75,46 +75,115 @@ public func decodeDirectory(_ bytes: some Collection<UInt8>, limits: Limits = Li
 }
 
 package func decodeDirectory(bytes: [UInt8], limits: Limits) throws(PMTilesError) -> [Entry] {
-    var r = VarintReader(bytes)
-    let n = try r.next()
-    guard n <= limits.maxDirectoryEntries else { throw PMTilesError(.limitExceeded, "pmtiles.directory_too_large") }
-    let count = Int(n)
-    var entries = [Entry]()
-    entries.reserveCapacity(count)
-
-    var last: UInt64 = 0
-    for i in 0..<count {
-        let delta = try r.next()
-        // Tile ids must strictly increase (D-002).
-        if i > 0 && delta == 0 { throw PMTilesError(.invalidInput, "pmtiles.invalid_directory") }
-        let (id, overflow) = last.addingReportingOverflow(delta)
-        if overflow { throw PMTilesError(.invalidInput, "pmtiles.invalid_directory") }
-        last = id
-        entries.append(Entry(tileId: id, offset: 0, length: 0, runLength: 0))
-    }
-    for i in 0..<count {
-        let v = try r.next()
-        guard v <= UInt64(UInt32.max) else { throw PMTilesError(.invalidInput, "pmtiles.invalid_directory") }
-        entries[i].runLength = UInt32(v)
-    }
-    for i in 0..<count {
-        let v = try r.next()
-        guard v <= UInt64(UInt32.max) else { throw PMTilesError(.invalidInput, "pmtiles.invalid_directory") }
-        entries[i].length = UInt32(v)
-    }
-    for i in 0..<count {
-        let v = try r.next()
-        if v == 0 {
-            // "Continue from the previous entry": the first entry has none (D-002).
-            guard i > 0 else { throw PMTilesError(.invalidInput, "pmtiles.invalid_directory") }
-            let (off, overflow) = entries[i - 1].offset.addingReportingOverflow(UInt64(entries[i - 1].length))
-            if overflow { throw PMTilesError(.invalidInput, "pmtiles.invalid_directory") }
-            entries[i].offset = off
-        } else {
-            entries[i].offset = v - 1
+    // Hot path: unsafe pointers with explicit length checks (every byte read is checked
+    // against the end), so the loops skip per-access bounds checks. Failures are a
+    // one-byte code until the end, so the per-varint check copies nothing.
+    var failure = Failure.none
+    let entries: [Entry] = bytes.withUnsafeBufferPointer { b in
+        var r = UnsafeVarintReader(b)
+        let n = r.next()
+        if r.failure != .none { failure = r.failure; return [] }
+        guard n <= limits.maxDirectoryEntries else { failure = .tooManyEntries; return [] }
+        let count = Int(n)
+        return [Entry](unsafeUninitializedCapacity: count) { e, initialized in
+            e.initialize(repeating: Entry(tileId: 0, offset: 0, length: 0, runLength: 0))
+            failure = decodeEntries(&r, e, count)
+            initialized = count
         }
     }
-    return entries
+    switch failure {
+    case .none: return entries
+    case .truncated: throw PMTilesError(.invalidInput, "pmtiles.truncated")
+    case .varintOverflow: throw PMTilesError(.invalidInput, "pmtiles.varint_overflow")
+    case .invalid: throw PMTilesError(.invalidInput, "pmtiles.invalid_directory")
+    case .tooManyEntries: throw PMTilesError(.limitExceeded, "pmtiles.directory_too_large")
+    }
+}
+
+enum Failure: UInt8 { case none, truncated, varintOverflow, invalid, tooManyEntries }
+
+private func decodeEntries(_ r: inout UnsafeVarintReader, _ e: UnsafeMutableBufferPointer<Entry>, _ count: Int) -> Failure {
+    var last: UInt64 = 0
+    for i in 0..<count {
+        let delta = r.next()
+        if r.failure != .none { return r.failure }
+        // Tile ids must strictly increase (D-002).
+        if i > 0 && delta == 0 { return .invalid }
+        let (id, overflow) = last.addingReportingOverflow(delta)
+        if overflow { return .invalid }
+        last = id
+        e[i].tileId = id
+    }
+    for i in 0..<count {
+        let v = r.next()
+        if r.failure != .none { return r.failure }
+        if v > UInt64(UInt32.max) { return .invalid }
+        e[i].runLength = UInt32(truncatingIfNeeded: v)
+    }
+    for i in 0..<count {
+        let v = r.next()
+        if r.failure != .none { return r.failure }
+        if v > UInt64(UInt32.max) { return .invalid }
+        e[i].length = UInt32(truncatingIfNeeded: v)
+    }
+    for i in 0..<count {
+        let v = r.next()
+        if r.failure != .none { return r.failure }
+        if v == 0 {
+            // "Continue from the previous entry": the first entry has none (D-002).
+            if i == 0 { return .invalid }
+            let (off, overflow) = e[i - 1].offset.addingReportingOverflow(UInt64(e[i - 1].length))
+            if overflow { return .invalid }
+            e[i].offset = off
+        } else {
+            e[i].offset = v - 1
+        }
+    }
+    return .none
+}
+
+/// Varint reader over an unsafe buffer. Never throws: records the first failure and
+/// returns 0 afterwards, so hot loops check a byte instead of unwinding.
+struct UnsafeVarintReader {
+    let b: UnsafeBufferPointer<UInt8>
+    var index = 0
+    var failure = Failure.none
+
+    init(_ b: UnsafeBufferPointer<UInt8>) { self.b = b }
+
+    @inline(__always) mutating func next() -> UInt64 {
+        // Fast path: directory values almost always fit in one or two bytes.
+        if index + 1 < b.count {
+            let b0 = b[index]
+            if b0 < 0x80 {
+                index += 1
+                return UInt64(b0)
+            }
+            let b1 = b[index + 1]
+            if b1 < 0x80 {
+                index += 2
+                return UInt64(b0 & 0x7F) | UInt64(b1) << 7
+            }
+        }
+        return slow()
+    }
+
+    @inline(never) mutating func slow() -> UInt64 {
+        var result: UInt64 = 0
+        var shift: UInt64 = 0
+        for n in 0..<10 {
+            guard index < b.count else { failure = .truncated; return 0 }
+            let byte = b[index]
+            index += 1
+            // The 10th byte may only carry bit 63.
+            if n == 9 && byte > 1 { failure = .varintOverflow; return 0 }
+            result |= UInt64(byte & 0x7F) << shift
+            if byte < 0x80 { return result }
+            shift += 7
+        }
+        failure = .varintOverflow
+        return 0
+    }
 }
 
 // MARK: - tile ids

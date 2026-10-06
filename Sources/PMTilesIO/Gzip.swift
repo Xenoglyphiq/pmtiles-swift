@@ -42,17 +42,47 @@ package func gunzip(_ data: [UInt8], maxOutput: Int) throws(InflateError) -> [UI
     return out
 }
 
-// MARK: - CRC-32 (IEEE)
+// MARK: - CRC-32 (IEEE), slicing-by-8
 
-private let crcTable: [UInt32] = (0..<256).map { n in
-    var c = UInt32(n)
-    for _ in 0..<8 { c = c & 1 != 0 ? 0xEDB8_8320 ^ (c >> 1) : c >> 1 }
-    return c
-}
+/// Eight 256-entry tables: table 0 is the classic byte-at-a-time table, and table k
+/// advances a byte's contribution by k more bytes, so the loop eats 8 bytes per step.
+private let crcTables: [UInt32] = {
+    var t = [UInt32](repeating: 0, count: 8 * 256)
+    for n in 0..<256 {
+        var c = UInt32(n)
+        for _ in 0..<8 { c = c & 1 != 0 ? 0xEDB8_8320 ^ (c >> 1) : c >> 1 }
+        t[n] = c
+    }
+    for k in 1..<8 {
+        for n in 0..<256 {
+            let prev = t[(k - 1) * 256 + n]
+            t[k * 256 + n] = t[Int(prev & 0xFF)] ^ (prev >> 8)
+        }
+    }
+    return t
+}()
 
 package func crc32(_ bytes: [UInt8]) -> UInt32 {
     var c: UInt32 = 0xFFFF_FFFF
-    for b in bytes { c = crcTable[Int((c ^ UInt32(b)) & 0xFF)] ^ (c >> 8) }
+    crcTables.withUnsafeBufferPointer { t in
+        bytes.withUnsafeBufferPointer { b in
+            var i = 0
+            let n = b.count
+            while i + 8 <= n {
+                let lo = c ^ (UInt32(b[i]) | UInt32(b[i + 1]) << 8 | UInt32(b[i + 2]) << 16 | UInt32(b[i + 3]) << 24)
+                let hi = UInt32(b[i + 4]) | UInt32(b[i + 5]) << 8 | UInt32(b[i + 6]) << 16 | UInt32(b[i + 7]) << 24
+                c = t[7 * 256 + Int(lo & 0xFF)] ^ t[6 * 256 + Int((lo >> 8) & 0xFF)]
+                    ^ t[5 * 256 + Int((lo >> 16) & 0xFF)] ^ t[4 * 256 + Int(lo >> 24)]
+                    ^ t[3 * 256 + Int(hi & 0xFF)] ^ t[2 * 256 + Int((hi >> 8) & 0xFF)]
+                    ^ t[1 * 256 + Int((hi >> 16) & 0xFF)] ^ t[Int(hi >> 24)]
+                i += 8
+            }
+            while i < n {
+                c = t[Int((c ^ UInt32(b[i])) & 0xFF)] ^ (c >> 8)
+                i += 1
+            }
+        }
+    }
     return c ^ 0xFFFF_FFFF
 }
 
