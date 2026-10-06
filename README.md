@@ -6,11 +6,6 @@ Swift tools 6.0 · iOS 16 / macOS 13 / Linux. **No dependencies.** gzip is decod
 
 ## Install
 
-> **Not released yet.** Until the first release, depend on `main`:
-> `.package(url: "https://github.com/Xenoglyphiq/pmtiles-swift", branch: "main")`
-
-Once released:
-
 ```swift
 .package(url: "https://github.com/Xenoglyphiq/pmtiles-swift", from: "0.1.0")
 ```
