@@ -62,7 +62,9 @@ print(try await readMetadata(HTTPSource(url: url)))
 
 Errors are `PMTilesError` (typed throws) with a `kind` (`invalidInput`, `unsupported`, `limitExceeded`, `io`, …) and a stable `code` such as `pmtiles.bad_magic`. Full list: spec §3.
 
-**Compression:** internal `none` and `gzip` are supported; `brotli` and `zstd` are `pmtiles.unsupported_compression`. Tile bytes are returned as stored; decompressing or decoding tiles is up to you.
+**Compression:** internal `none` and `gzip` are supported; `brotli` and `zstd` are `pmtiles.unsupported_compression`. Tile bytes are returned as stored; decompressing or decoding tiles is up to you. A compressed stream that doesn't decode (corrupt, cut short, or a gzip CRC-32 or length mismatch) is `pmtiles.decompression_failed`.
+
+**Metadata** must be well-formed UTF-8; anything else is `pmtiles.invalid_metadata`, never repaired with replacement characters. The JSON itself isn't parsed.
 
 **HTTP:** `HTTPSource` sends `Accept-Encoding: identity`. Some servers otherwise apply the range to a gzip-encoded copy of the file, which returns the wrong bytes.
 

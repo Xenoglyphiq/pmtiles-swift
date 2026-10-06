@@ -67,11 +67,9 @@ public final class FileSource: ByteSource {
 
 /// Decompresses internal data (directories, metadata). `none` and `gzip` are supported;
 /// anything else is `pmtiles.unsupported_compression`. Output is capped at `limit` bytes,
-/// and exceeding it is `limitCode`.
-///
-/// The spec doesn't yet name an error for a corrupt compressed stream; this uses
-/// `corruptCode` (proposed upstream as `pmtiles.decompression_failed`).
-func decompress(_ data: [UInt8], _ compression: Compression, limit: UInt64, limitCode: String, corruptCode: String) throws(PMTilesError) -> [UInt8] {
+/// and exceeding it is `limitCode`. A stream that doesn't decode (including a gzip CRC-32
+/// or length mismatch) is `pmtiles.decompression_failed` (spec D-006).
+func decompress(_ data: [UInt8], _ compression: Compression, limit: UInt64, limitCode: String) throws(PMTilesError) -> [UInt8] {
     switch compression {
     case .none:
         return data
@@ -81,7 +79,7 @@ func decompress(_ data: [UInt8], _ compression: Compression, limit: UInt64, limi
         } catch .tooLarge {
             throw PMTilesError(.limitExceeded, limitCode)
         } catch {
-            throw PMTilesError(.invalidInput, corruptCode)
+            throw PMTilesError(.invalidInput, "pmtiles.decompression_failed")
         }
     default:
         throw PMTilesError(.unsupported, "pmtiles.unsupported_compression")
@@ -100,7 +98,7 @@ private func readDirectory(
     guard length <= limits.maxDirectoryBytes else { throw PMTilesError(.limitExceeded, "pmtiles.directory_too_large") }
     let raw = try await source.read(offset: offset, length: length)
     guard UInt64(raw.count) == length else { throw PMTilesError(.invalidInput, "pmtiles.truncated") }
-    let bytes = try decompress(raw, header.internalCompression, limit: limits.maxDirectoryBytes, limitCode: "pmtiles.directory_too_large", corruptCode: "pmtiles.invalid_directory")
+    let bytes = try decompress(raw, header.internalCompression, limit: limits.maxDirectoryBytes, limitCode: "pmtiles.directory_too_large")
     return try decodeDirectory(bytes: bytes, limits: limits)
 }
 
@@ -137,7 +135,8 @@ public func getTile(_ source: some ByteSource, _ coord: TileCoord, limits: Limit
     return try await lookup(source, header, root: root, tileId: tileId, limits: limits)
 }
 
-/// Spec operation `read_metadata`: the archive's JSON metadata as text, unparsed.
+/// Spec operation `read_metadata`: the archive's JSON metadata as text, unparsed. Metadata
+/// that isn't well-formed UTF-8 is `pmtiles.invalid_metadata` (spec D-007), never repaired.
 public func readMetadata(_ source: some ByteSource, limits: Limits = Limits()) async throws(PMTilesError) -> String {
     let header = try await readHeader(source)
     guard header.metadataLength <= limits.maxMetadataBytes else {
@@ -145,7 +144,11 @@ public func readMetadata(_ source: some ByteSource, limits: Limits = Limits()) a
     }
     let raw = try await source.read(offset: header.metadataOffset, length: header.metadataLength)
     guard UInt64(raw.count) == header.metadataLength else { throw PMTilesError(.invalidInput, "pmtiles.truncated") }
-    let bytes = try decompress(raw, header.internalCompression, limit: limits.maxMetadataBytes, limitCode: "pmtiles.metadata_too_large", corruptCode: "pmtiles.truncated")
+    let bytes = try decompress(raw, header.internalCompression, limit: limits.maxMetadataBytes, limitCode: "pmtiles.metadata_too_large")
+    // The standard library's UTF-8 decoder is strict (no overlong forms or encoded
+    // surrogates), and this works on every supported OS, unlike String(validating:).
+    let invalid = transcode(bytes.makeIterator(), from: UTF8.self, to: UTF8.self, stoppingOnError: true) { _ in }
+    guard !invalid else { throw PMTilesError(.invalidInput, "pmtiles.invalid_metadata") }
     return String(decoding: bytes, as: UTF8.self)
 }
 
