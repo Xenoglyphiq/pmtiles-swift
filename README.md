@@ -1,13 +1,13 @@
 # PMTiles for Swift
 
-Read [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file tile archives: header, directories, tile lookup and tile bytes, from memory, a file, or HTTP range requests. Implements the pmtiles spec · Spec v0.1.1 · Conformance: **core ✓ io ✓ full ✓** (68/68)
+Read [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file tile archives: header, directories, tile lookup and tile bytes, from memory, a file, or HTTP range requests. Implements the pmtiles spec · Spec v0.2.0 · Conformance: **core ✓ io ✓ full ✓** (81/81)
 
 Swift tools 6.0 · iOS 16 / macOS 13 / Linux. **No dependencies.** gzip is decoded by a small built-in inflate, so io works the same on Apple platforms and Linux.
 
 ## Install
 
 ```swift
-.package(url: "https://github.com/Xenoglyphiq/pmtiles-swift", from: "0.1.0")
+.package(url: "https://github.com/Xenoglyphiq/pmtiles-swift", from: "0.2.0")
 ```
 
 Then add `PMTiles` (core) and/or `PMTilesIO` (sources, `getTile`, `readMetadata`) to your target.
@@ -62,7 +62,9 @@ print(try await readMetadata(HTTPSource(url: url)))
 
 Errors are `PMTilesError` (typed throws) with a `kind` (`invalidInput`, `unsupported`, `limitExceeded`, `io`, …) and a stable `code` such as `pmtiles.bad_magic`. Full list: spec §3.
 
-**Compression:** internal `none` and `gzip` are supported; `brotli` and `zstd` are `pmtiles.unsupported_compression`. Tile bytes are returned as stored; decompressing or decoding tiles is up to you.
+**Compression:** internal `none` and `gzip` are supported; `brotli` and `zstd` are `pmtiles.unsupported_compression`. Tile bytes are returned as stored; decompressing or decoding tiles is up to you. A compressed stream that doesn't decode (corrupt, cut short, or a gzip CRC-32 or length mismatch) is `pmtiles.decompression_failed`.
+
+**Metadata** must be well-formed UTF-8; anything else is `pmtiles.invalid_metadata`, never repaired with replacement characters. The JSON itself isn't parsed.
 
 **HTTP:** `HTTPSource` sends `Accept-Encoding: identity`. Some servers otherwise apply the range to a gzip-encoded copy of the file, which returns the wrong bytes.
 
